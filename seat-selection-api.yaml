@@ -1,772 +1,103 @@
-# A7 REST API Design, Part 2: API specification
-# Jolina Jasperson
-#
-# The seat selection service from the Part 1 sequence diagram (calls 2, 3,
-# and 4). It's a design, so the servers are made up and nothing is running
-# behind them.
-
 openapi: 3.0.3
-
 info:
-  title: Movie Theater Seat Selection API
+  title: Seat Selection API
   version: 1.0.0
-  description: |
-    The seat part of a movie theater's ticketing backend. The theater's
-    website and phone app use it to show the seat map for a showtime and to
-    hold the seats a customer picks while they pay, so two people can't buy
-    the same seat.
-
-    Where it fits when someone buys tickets:
-
-    1. The app finds a showtime with `GET /showtimes` (Showtimes API, not in this file).
-    2. `GET /showtimes/{showtimeId}/seats` grabs the seat map so the customer can see what's open.
-    3. `POST /showtimes/{showtimeId}/seat-holds` holds the seats they picked for 10 minutes. Nobody else can hold or buy them during that time.
-    4. `POST /orders` (Orders API, not in this file) pays for the hold and turns it into tickets.
-    5. If the customer goes back to change seats or leaves checkout, `DELETE /seat-holds/{holdId}` puts the seats back on sale right away.
-
-    Rules that apply everywhere:
-
-    - A hold lasts 10 minutes. When it runs out, the seats go back on sale on their own and the hold is gone.
-    - A hold has 1 to 10 seats, all for the same showtime.
-    - Money is whole cents in US dollars (`1399` means $13.99), so totals don't pick up floating point rounding errors.
-    - Anyone can look at a seat map. Everything else needs the customer's session token, and guests get one too, so nobody has to make an account to buy tickets.
-    - Every error comes back in the same `Error` shape, with a `code` the app can check and a `message` a person can read.
-  termsOfService: https://www.theater.example.com/terms
-  contact:
-    name: Theater API team
-    url: https://developer.theater.example.com
-    email: api@theater.example.com
-  license:
-    name: MIT
-    url: https://opensource.org/licenses/MIT
-
-servers:
-  - url: https://api.theater.example.com/v1
-    description: Production
-  - url: https://staging-api.theater.example.com/v1
-    description: Staging, with test data
-  - url: http://localhost:8080/v1
-    description: Local development
-
-tags:
-  - name: Seats
-    description: Seat maps for showtimes.
-  - name: Seat holds
-    description: Ten-minute holds that save seats for a customer while they pay.
-
-security:
-  - sessionToken: []
+  description: >-
+    Lets a movie theater customer see which seats are open for a showtime,
+    hold the seats they pick for 10 minutes while they pay, and release a
+    hold so the seats go back on sale.
 
 paths:
   /showtimes/{showtimeId}/seats:
     get:
-      tags:
-        - Seats
       summary: Get the seat map for a showtime
-      description: |
-        Sends back every seat in the auditorium for this showtime and whether
-        each one is available, held, or sold. Each seat also has its type and
-        its spot on the map grid so the app can draw it, and the response has
-        the ticket prices to show next to the map. It doesn't need a session
-        token, so anyone can call it.
-
-        Seats change status all the time, so the app should load this again
-        whenever the customer comes back to the map. A seat can still get
-        taken between this call and the hold request. That's what the 409 on
-        `POST /showtimes/{showtimeId}/seat-holds` is for.
-      operationId: getSeatMap
-      security: []
       parameters:
-        - $ref: '#/components/parameters/ShowtimeId'
-        - name: status
-          in: query
-          required: false
-          description: Only send back seats with this status. Leave it off to get every seat.
+        - name: showtimeId
+          in: path
+          required: true
           schema:
-            $ref: '#/components/schemas/SeatStatus'
-        - name: seatType
-          in: query
-          required: false
-          description: Only send back seats of this type. For example, `WHEELCHAIR` finds the wheelchair spaces.
-          schema:
-            $ref: '#/components/schemas/SeatType'
+            type: string
       responses:
         '200':
           description: The seat map.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SeatMap'
-              example:
-                showtimeId: sh_1042
-                movieTitle: The Last Orbit
-                startsAt: '2026-10-31T23:30:00Z'
-                auditorium:
-                  name: Auditorium 4
-                  rows: 12
-                  columns: 20
-                maxSeatsPerHold: 10
-                ticketPrices:
-                  - ticketType: ADULT
-                    priceCents: 1399
-                  - ticketType: CHILD
-                    priceCents: 999
-                  - ticketType: SENIOR
-                    priceCents: 1099
-                seats:
-                  - seatId: A1
-                    row: A
-                    number: 1
-                    type: WHEELCHAIR
-                    status: AVAILABLE
-                    x: 0
-                    y: 0
-                  - seatId: A2
-                    row: A
-                    number: 2
-                    type: COMPANION
-                    status: HELD
-                    x: 1
-                    y: 0
-                  - seatId: F7
-                    row: F
-                    number: 7
-                    type: STANDARD
-                    status: AVAILABLE
-                    x: 8
-                    y: 5
-                  - seatId: F8
-                    row: F
-                    number: 8
-                    type: STANDARD
-                    status: AVAILABLE
-                    x: 9
-                    y: 5
-                  - seatId: F9
-                    row: F
-                    number: 9
-                    type: STANDARD
-                    status: SOLD
-                    x: 10
-                    y: 5
-        '400':
-          description: A query parameter has a value that isn't allowed, like `status=RESERVED`.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                code: INVALID_PARAMETER
-                message: status has to be AVAILABLE, HELD, or SOLD. Got RESERVED.
+                type: object
+                properties:
+                  seats:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        seatId:
+                          type: string
+                        status:
+                          type: string
+                          enum: [AVAILABLE, HELD, SOLD]
         '404':
-          $ref: '#/components/responses/ShowtimeNotFound'
-        '500':
-          $ref: '#/components/responses/ServerError'
+          description: Showtime not found.
 
   /showtimes/{showtimeId}/seat-holds:
     post:
-      tags:
-        - Seat holds
-      summary: Hold seats for checkout
-      description: |
-        Holds the seats the customer picked for 10 minutes so nobody else can
-        buy them while they pay. If even one seat is already held or sold,
-        nothing gets held, and the 409 response says which seats were the
-        problem.
-
-        The response has the price breakdown for the checkout page and
-        `expiresAt` for the countdown timer. Pay for the hold with
-        `POST /orders` before it runs out. To change seats, release this hold
-        with `DELETE /seat-holds/{holdId}` and make a new one.
-
-        Send an `Idempotency-Key` header so a retry can't hold the seats
-        twice. If the request times out and the app sends it again with the
-        same key, it gets the same hold back.
-      operationId: createSeatHold
+      summary: Hold seats for 10 minutes
       parameters:
-        - $ref: '#/components/parameters/ShowtimeId'
-        - $ref: '#/components/parameters/IdempotencyKey'
+        - name: showtimeId
+          in: path
+          required: true
+          schema:
+            type: string
       requestBody:
         required: true
-        description: The seats to hold and the ticket type for each one.
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/SeatHoldRequest'
-            examples:
-              twoAdults:
-                summary: Two adults
-                value:
-                  seats:
-                    - seatId: F7
-                      ticketType: ADULT
-                    - seatId: F8
-                      ticketType: ADULT
-              family:
-                summary: Two adults and two kids
-                value:
-                  seats:
-                    - seatId: G10
-                      ticketType: ADULT
-                    - seatId: G11
-                      ticketType: ADULT
-                    - seatId: G12
-                      ticketType: CHILD
-                    - seatId: G13
-                      ticketType: CHILD
+              type: object
+              properties:
+                seatIds:
+                  type: array
+                  items:
+                    type: string
       responses:
         '201':
-          description: The seats are held. The body is the new hold.
-          headers:
-            Location:
-              description: Where the new hold lives, for `GET` and `DELETE`.
-              schema:
-                type: string
-              example: /v1/seat-holds/hold_8Kq2Zp
+          description: Seats held.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SeatHold'
-              example:
-                holdId: hold_8Kq2Zp
-                showtimeId: sh_1042
-                status: ACTIVE
-                seats:
-                  - seatId: F7
-                    ticketType: ADULT
-                    priceCents: 1399
-                  - seatId: F8
-                    ticketType: ADULT
-                    priceCents: 1399
-                price:
-                  currency: USD
-                  subtotalCents: 2798
-                  bookingFeeCents: 300
-                  taxCents: 210
-                  totalCents: 3308
-                createdAt: '2026-10-31T22:05:00Z'
-                expiresAt: '2026-10-31T22:15:00Z'
-        '400':
-          description: |
-            Something's wrong with the request body, like no seats, more than
-            10 seats, the same seat twice, a seat that isn't in this
-            auditorium, or a ticket type that doesn't exist.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              examples:
-                tooManySeats:
-                  summary: More than 10 seats
-                  value:
-                    code: TOO_MANY_SEATS
-                    message: A hold can have at most 10 seats. This one had 12.
-                sameSeatTwice:
-                  summary: Same seat twice
-                  value:
-                    code: DUPLICATE_SEAT
-                    message: Seat F7 is in the request twice.
-                unknownSeat:
-                  summary: Seat doesn't exist
-                  value:
-                    code: UNKNOWN_SEAT
-                    message: Auditorium 4 doesn't have a seat Z99.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '404':
-          $ref: '#/components/responses/ShowtimeNotFound'
+                type: object
+                properties:
+                  holdId:
+                    type: string
+                  expiresAt:
+                    type: string
+                    format: date-time
+                  totalCents:
+                    type: integer
         '409':
-          description: |
-            At least one seat is already held or sold, so nothing got held.
-            `unavailableSeats` lists those seats. The app should reload the
-            seat map and let the customer pick again.
+          description: A seat is already taken.
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/SeatsUnavailableError'
-              example:
-                code: SEATS_UNAVAILABLE
-                message: Seat F8 was just taken. Pick a different seat.
-                unavailableSeats:
-                  - F8
-        '500':
-          $ref: '#/components/responses/ServerError'
+                type: object
+                properties:
+                  unavailableSeats:
+                    type: array
+                    items:
+                      type: string
 
   /seat-holds/{holdId}:
-    get:
-      tags:
-        - Seat holds
-      summary: Get a seat hold
-      description: |
-        Sends back the hold, including the price breakdown and `expiresAt`.
-        The checkout page uses this for the order summary and the countdown,
-        and to check that the hold is still good before it shows the payment
-        form.
-      operationId: getSeatHold
-      parameters:
-        - $ref: '#/components/parameters/HoldId'
-      responses:
-        '200':
-          description: The hold.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/SeatHold'
-              example:
-                holdId: hold_8Kq2Zp
-                showtimeId: sh_1042
-                status: ACTIVE
-                seats:
-                  - seatId: F7
-                    ticketType: ADULT
-                    priceCents: 1399
-                  - seatId: F8
-                    ticketType: ADULT
-                    priceCents: 1399
-                price:
-                  currency: USD
-                  subtotalCents: 2798
-                  bookingFeeCents: 300
-                  taxCents: 210
-                  totalCents: 3308
-                createdAt: '2026-10-31T22:05:00Z'
-                expiresAt: '2026-10-31T22:15:00Z'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/NotYourHold'
-        '404':
-          $ref: '#/components/responses/HoldNotFound'
-        '500':
-          $ref: '#/components/responses/ServerError'
-
     delete:
-      tags:
-        - Seat holds
       summary: Release a seat hold
-      description: |
-        Lets go of the held seats so other people can buy them right away.
-        The app calls this when the customer goes back to change seats or
-        leaves checkout.
-
-        A hold that's already been paid for can't be released, because those
-        seats are sold. To give them back, cancel the order through the Orders
-        API.
-
-        Calling this twice is safe. The second call gets a 404 because the
-        hold's already gone, and nothing else changes.
-      operationId: releaseSeatHold
       parameters:
-        - $ref: '#/components/parameters/HoldId'
+        - name: holdId
+          in: path
+          required: true
+          schema:
+            type: string
       responses:
         '204':
-          description: The hold is released and the seats are available again. There's no response body.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/NotYourHold'
+          description: Hold released.
         '404':
-          $ref: '#/components/responses/HoldNotFound'
+          description: Hold not found.
         '409':
-          description: |
-            The hold was already used to buy tickets, so those seats are sold
-            and can't be released here. Cancel the order to give them back.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              example:
-                code: HOLD_ALREADY_PURCHASED
-                message: This hold was paid for in order ord_55120. Cancel the order to give the seats back.
-        '500':
-          $ref: '#/components/responses/ServerError'
-
-components:
-  securitySchemes:
-    sessionToken:
-      type: http
-      scheme: bearer
-      bearerFormat: JWT
-      description: |
-        The customer's session token, sent as `Authorization: Bearer <token>`.
-        The app gets one when the customer signs in, or a guest one when they
-        start checkout without an account. A hold belongs to the session that
-        made it.
-
-  parameters:
-    ShowtimeId:
-      name: showtimeId
-      in: path
-      required: true
-      description: ID of the showtime, from the Showtimes API.
-      schema:
-        type: string
-        pattern: '^sh_[A-Za-z0-9]{4,20}$'
-      example: sh_1042
-    HoldId:
-      name: holdId
-      in: path
-      required: true
-      description: ID of the hold, from the response to the hold request.
-      schema:
-        type: string
-        pattern: '^hold_[A-Za-z0-9]{6,24}$'
-      example: hold_8Kq2Zp
-    IdempotencyKey:
-      name: Idempotency-Key
-      in: header
-      required: false
-      description: |
-        A unique value the app makes up for each new hold. A UUID works. If
-        the server sees the same key again within 24 hours, it sends back the
-        hold it already made.
-      schema:
-        type: string
-        format: uuid
-      example: 6f1c2a9e-3b7d-4c58-9e21-0d4f8a7b5c33
-
-  responses:
-    Unauthorized:
-      description: |
-        The request has no session token, or the token has expired or isn't
-        valid. The app should sign the customer in again or start a new guest
-        session.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            code: UNAUTHORIZED
-            message: Missing or expired session token.
-    NotYourHold:
-      description: The token is fine, but this hold belongs to a different session.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            code: FORBIDDEN
-            message: This hold belongs to a different session.
-    ShowtimeNotFound:
-      description: There's no showtime with that ID.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            code: SHOWTIME_NOT_FOUND
-            message: No showtime with ID sh_9999.
-    HoldNotFound:
-      description: |
-        There's no active hold with that ID. It might have run out or already
-        been released.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            code: HOLD_NOT_FOUND
-            message: No active hold with ID hold_8Kq2Zp. It may have expired.
-    ServerError:
-      description: Something broke on the server. Try again in a bit.
-      content:
-        application/json:
-          schema:
-            $ref: '#/components/schemas/Error'
-          example:
-            code: INTERNAL_ERROR
-            message: Something went wrong on our end. Try again in a minute.
-
-  schemas:
-    SeatStatus:
-      type: string
-      enum:
-        - AVAILABLE
-        - HELD
-        - SOLD
-      description: |
-        - `AVAILABLE`: open, anyone can hold it
-        - `HELD`: in someone's hold that hasn't run out yet
-        - `SOLD`: already bought
-      example: AVAILABLE
-
-    SeatType:
-      type: string
-      enum:
-        - STANDARD
-        - WHEELCHAIR
-        - COMPANION
-      description: |
-        - `STANDARD`: a regular seat
-        - `WHEELCHAIR`: a wheelchair space
-        - `COMPANION`: the seat next to a wheelchair space, for whoever came with them
-      example: STANDARD
-
-    TicketType:
-      type: string
-      enum:
-        - ADULT
-        - CHILD
-        - SENIOR
-      description: Which price a seat gets. Kids are 12 and under and seniors are 60 and up.
-      example: ADULT
-
-    Seat:
-      type: object
-      required:
-        - seatId
-        - row
-        - number
-        - type
-        - status
-        - x
-        - y
-      properties:
-        seatId:
-          type: string
-          pattern: '^[A-Z]{1,2}[0-9]{1,3}$'
-          description: Row letter plus seat number. Unique in the auditorium.
-          example: F7
-        row:
-          type: string
-          example: F
-        number:
-          type: integer
-          minimum: 1
-          example: 7
-        type:
-          $ref: '#/components/schemas/SeatType'
-        status:
-          $ref: '#/components/schemas/SeatStatus'
-        x:
-          type: integer
-          minimum: 0
-          description: Column on the seat map grid, counting from 0 on the left. Aisles take up columns too.
-          example: 8
-        y:
-          type: integer
-          minimum: 0
-          description: Row on the seat map grid, counting from 0 at the screen.
-          example: 5
-
-    TicketPrice:
-      type: object
-      required:
-        - ticketType
-        - priceCents
-      properties:
-        ticketType:
-          $ref: '#/components/schemas/TicketType'
-        priceCents:
-          type: integer
-          minimum: 0
-          description: Price of one ticket, in cents.
-          example: 1399
-
-    Auditorium:
-      type: object
-      required:
-        - name
-        - rows
-        - columns
-      properties:
-        name:
-          type: string
-          example: Auditorium 4
-        rows:
-          type: integer
-          minimum: 1
-          description: Rows on the seat map grid.
-          example: 12
-        columns:
-          type: integer
-          minimum: 1
-          description: Columns on the seat map grid, aisles included.
-          example: 20
-
-    SeatMap:
-      type: object
-      required:
-        - showtimeId
-        - movieTitle
-        - startsAt
-        - auditorium
-        - ticketPrices
-        - seats
-      properties:
-        showtimeId:
-          type: string
-          example: sh_1042
-        movieTitle:
-          type: string
-          example: The Last Orbit
-        startsAt:
-          type: string
-          format: date-time
-          example: '2026-10-31T23:30:00Z'
-        auditorium:
-          $ref: '#/components/schemas/Auditorium'
-        maxSeatsPerHold:
-          type: integer
-          description: Most seats one hold can have.
-          example: 10
-        ticketPrices:
-          type: array
-          items:
-            $ref: '#/components/schemas/TicketPrice'
-        seats:
-          type: array
-          description: Every seat, or just the ones that match the filters.
-          items:
-            $ref: '#/components/schemas/Seat'
-
-    SeatSelection:
-      type: object
-      required:
-        - seatId
-        - ticketType
-      properties:
-        seatId:
-          type: string
-          pattern: '^[A-Z]{1,2}[0-9]{1,3}$'
-          example: F7
-        ticketType:
-          $ref: '#/components/schemas/TicketType'
-
-    SeatHoldRequest:
-      type: object
-      required:
-        - seats
-      properties:
-        seats:
-          type: array
-          description: The seats to hold, 1 to 10, each seat once.
-          minItems: 1
-          maxItems: 10
-          items:
-            $ref: '#/components/schemas/SeatSelection'
-
-    HeldSeat:
-      type: object
-      required:
-        - seatId
-        - ticketType
-        - priceCents
-      properties:
-        seatId:
-          type: string
-          example: F7
-        ticketType:
-          $ref: '#/components/schemas/TicketType'
-        priceCents:
-          type: integer
-          minimum: 0
-          description: Price for this seat and ticket type, in cents.
-          example: 1399
-
-    PriceSummary:
-      type: object
-      required:
-        - currency
-        - subtotalCents
-        - bookingFeeCents
-        - taxCents
-        - totalCents
-      properties:
-        currency:
-          type: string
-          enum:
-            - USD
-          example: USD
-        subtotalCents:
-          type: integer
-          minimum: 0
-          description: The ticket prices added up.
-          example: 2798
-        bookingFeeCents:
-          type: integer
-          minimum: 0
-          description: Online booking fee, $1.50 per ticket.
-          example: 300
-        taxCents:
-          type: integer
-          minimum: 0
-          description: Sales tax on the tickets.
-          example: 210
-        totalCents:
-          type: integer
-          minimum: 0
-          description: What the customer pays. Subtotal plus booking fee plus tax.
-          example: 3308
-
-    SeatHold:
-      type: object
-      required:
-        - holdId
-        - showtimeId
-        - status
-        - seats
-        - price
-        - createdAt
-        - expiresAt
-      properties:
-        holdId:
-          type: string
-          example: hold_8Kq2Zp
-        showtimeId:
-          type: string
-          example: sh_1042
-        status:
-          type: string
-          enum:
-            - ACTIVE
-            - PURCHASED
-          description: |
-            - `ACTIVE`: the seats are held and waiting on payment
-            - `PURCHASED`: the hold was paid for with `POST /orders`, so the seats are sold
-          example: ACTIVE
-        seats:
-          type: array
-          items:
-            $ref: '#/components/schemas/HeldSeat'
-        price:
-          $ref: '#/components/schemas/PriceSummary'
-        createdAt:
-          type: string
-          format: date-time
-          example: '2026-10-31T22:05:00Z'
-        expiresAt:
-          type: string
-          format: date-time
-          description: When the hold runs out, 10 minutes after `createdAt`. After that the seats go back on sale and the hold is gone.
-          example: '2026-10-31T22:15:00Z'
-
-    Error:
-      type: object
-      required:
-        - code
-        - message
-      properties:
-        code:
-          type: string
-          description: Short code that doesn't change, for the app to check.
-          example: SHOWTIME_NOT_FOUND
-        message:
-          type: string
-          description: What went wrong, in plain English. Fine to show a person, but don't parse it.
-          example: No showtime with ID sh_9999.
-
-    SeatsUnavailableError:
-      allOf:
-        - $ref: '#/components/schemas/Error'
-        - type: object
-          required:
-            - unavailableSeats
-          properties:
-            unavailableSeats:
-              type: array
-              description: The seats from the request that are already held or sold.
-              items:
-                type: string
-              example:
-                - F8
+          description: Hold already paid for.
