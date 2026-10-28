@@ -22,14 +22,14 @@ info:
     2. `GET /showtimes/{showtimeId}/seats` grabs the seat map so the customer can see what's open.
     3. `POST /showtimes/{showtimeId}/seat-holds` holds the seats they picked for 10 minutes. Nobody else can hold or buy them during that time.
     4. `POST /orders` (Orders API, not in this file) pays for the hold and turns it into tickets.
-    5. If the customer goes back to change seats or leaves checkout, `DELETE /seat-holds/{holdId}` puts the seats back on sale right away instead of making everyone wait out the 10 minutes.
+    5. If the customer goes back to change seats or leaves checkout, `DELETE /seat-holds/{holdId}` puts the seats back on sale right away.
 
     Rules that apply everywhere:
 
     - A hold lasts 10 minutes. When it runs out, the seats go back on sale on their own and the hold is gone.
     - A hold has 1 to 10 seats, all for the same showtime.
-    - Money is whole cents in US dollars, so `1399` means $13.99. Whole numbers mean nothing gets rounded wrong.
-    - Anyone can look at a seat map. Holding, checking, and releasing seats needs the customer's session token. Guests get one too, so nobody has to make an account to buy tickets.
+    - Money is whole cents in US dollars (`1399` means $13.99), so totals don't pick up floating point rounding errors.
+    - Anyone can look at a seat map. Everything else needs the customer's session token, and guests get one too, so nobody has to make an account to buy tickets.
     - Every error comes back in the same `Error` shape, with a `code` the app can check and a `message` a person can read.
   termsOfService: https://www.theater.example.com/terms
   contact:
@@ -64,17 +64,16 @@ paths:
         - Seats
       summary: Get the seat map for a showtime
       description: |
-        Sends back every seat in the auditorium for this showtime: where it is
-        on the map, what kind of seat it is, and whether it's available, held,
-        or sold. It also has the ticket prices, so the app can show them next
-        to the map.
+        Sends back every seat in the auditorium for this showtime and whether
+        each one is available, held, or sold. Each seat also has its type and
+        its spot on the map grid so the app can draw it, and the response has
+        the ticket prices to show next to the map. It doesn't need a session
+        token, so anyone can call it.
 
         Seats change status all the time, so the app should load this again
         whenever the customer comes back to the map. A seat can still get
         taken between this call and the hold request. That's what the 409 on
         `POST /showtimes/{showtimeId}/seat-holds` is for.
-
-        No login needed. Anyone can look at a seat map.
       operationId: getSeatMap
       security: []
       parameters:
@@ -171,9 +170,9 @@ paths:
       summary: Hold seats for checkout
       description: |
         Holds the seats the customer picked for 10 minutes so nobody else can
-        buy them while the customer pays. It's all or nothing. If even one
-        seat is already held or sold, nothing gets held, and the 409 response
-        says which seats were the problem.
+        buy them while they pay. If even one seat is already held or sold,
+        nothing gets held, and the 409 response says which seats were the
+        problem.
 
         The response has the price breakdown for the checkout page and
         `expiresAt` for the countdown timer. Pay for the hold with
@@ -182,7 +181,7 @@ paths:
 
         Send an `Idempotency-Key` header so a retry can't hold the seats
         twice. If the request times out and the app sends it again with the
-        same key, it gets the first hold back instead of a second one.
+        same key, it gets the same hold back.
       operationId: createSeatHold
       parameters:
         - $ref: '#/components/parameters/ShowtimeId'
@@ -249,8 +248,8 @@ paths:
                 expiresAt: '2026-10-31T22:15:00Z'
         '400':
           description: |
-            Something's wrong with the request body. It has no seats, more
-            than 10 seats, the same seat twice, a seat that isn't in this
+            Something's wrong with the request body, like no seats, more than
+            10 seats, the same seat twice, a seat that isn't in this
             auditorium, or a ticket type that doesn't exist.
           content:
             application/json:
@@ -299,9 +298,9 @@ paths:
         - Seat holds
       summary: Get a seat hold
       description: |
-        Sends back the hold with its seats, prices, and when it runs out. The
-        checkout page uses this to show the order summary and the countdown,
-        and to make sure the hold is still good before it shows the payment
+        Sends back the hold, including the price breakdown and `expiresAt`.
+        The checkout page uses this for the order summary and the countdown,
+        and to check that the hold is still good before it shows the payment
         form.
       operationId: getSeatHold
       parameters:
@@ -346,13 +345,13 @@ paths:
         - Seat holds
       summary: Release a seat hold
       description: |
-        Lets go of the held seats so other people can buy them right away,
-        instead of waiting for the 10-minute timer. The app calls this when
-        the customer goes back to change seats or leaves checkout.
+        Lets go of the held seats so other people can buy them right away.
+        The app calls this when the customer goes back to change seats or
+        leaves checkout.
 
         A hold that's already been paid for can't be released, because those
-        seats are sold. To give them back, cancel the order instead (Orders
-        API).
+        seats are sold. To give them back, cancel the order through the Orders
+        API.
 
         Calling this twice is safe. The second call gets a 404 because the
         hold's already gone, and nothing else changes.
@@ -361,7 +360,7 @@ paths:
         - $ref: '#/components/parameters/HoldId'
       responses:
         '204':
-          description: Hold released. The seats are available again. There's no body.
+          description: The hold is released and the seats are available again. There's no response body.
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
@@ -371,7 +370,7 @@ paths:
         '409':
           description: |
             The hold was already used to buy tickets, so those seats are sold
-            and can't be released here. Cancel the order instead.
+            and can't be released here. Cancel the order to give them back.
           content:
             application/json:
               schema:
@@ -420,7 +419,7 @@ components:
       description: |
         A unique value the app makes up for each new hold. A UUID works. If
         the server sees the same key again within 24 hours, it sends back the
-        hold it already made instead of making a second one.
+        hold it already made.
       schema:
         type: string
         format: uuid
@@ -429,8 +428,9 @@ components:
   responses:
     Unauthorized:
       description: |
-        No session token, or it's expired or not valid. The app should sign
-        the customer in again or start a new guest session.
+        The request has no session token, or the token has expired or isn't
+        valid. The app should sign the customer in again or start a new guest
+        session.
       content:
         application/json:
           schema:
